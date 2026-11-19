@@ -1,0 +1,43 @@
+name: Rust CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Rust ${{ matrix.toolchain }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        toolchain:
+          - "1.85.0"
+          - "1.100.0"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install "${{ matrix.toolchain }}" \
+            --profile minimal \
+            --component rustfmt \
+            --component clippy
+
+      - name: Check formatting
+        run: cargo +${{ matrix.toolchain }} fmt --all -- --check
+
+      - name: Check workspace
+        run: cargo +${{ matrix.toolchain }} check --workspace --all-targets
+
+      - name: Run Clippy
+        run: cargo +${{ matrix.toolchain }} clippy --workspace --all-targets -- -D warnings
