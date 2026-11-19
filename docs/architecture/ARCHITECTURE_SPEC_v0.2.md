@@ -179,7 +179,7 @@ A `Run` represents the logical unit of work requested by a caller. It owns the o
 
 An `Attempt` represents one concrete execution of a run.
 
-A run MAY contain multiple attempts. Each attempt has an independent identity, execution history, resource accounting, and terminal outcome.
+A run MAY contain multiple attempts. Each Attempt has an independent identity, execution history, usage attribution, and terminal outcome. Resource usage is attributed to individual Attempts but accounted against the authoritative aggregate budgets of the parent Run.
 
 A retry creates a new attempt under the same logical run. It MUST NOT overwrite or erase the prior attempt.
 
@@ -351,38 +351,105 @@ It distinguishes cancellation before dispatch, during execution, after known suc
 
 ## 10. Execution Bounds and Budgets
 
-### 10.1 Mandatory attempt limits
+### 10.1 Run-level budget ownership
 
-Every attempt has mandatory limits, including:
+The logical Run is the authoritative aggregate budget boundary.
 
-- Maximum execution steps.
-- Maximum model requests.
-- Maximum tool calls.
-- Maximum consecutive failures.
-- Wall-clock deadline.
-- Context and output size.
-- Applicable executor resource limits.
-- Delegation limits when delegation exists.
+All execution budgets and ceilings apply to the Run as a whole and aggregate across every Attempt belonging to that Run. Creating a retry or a new Attempt MUST NOT reset, replenish, or independently expand any Run-level budget.
 
-Exhaustion produces an explicit policy-defined result. Caller-specified limits may tighten runtime limits but cannot remove mandatory ceilings.
+The Run-level account is authoritative for available, reserved, and consumed capacity. Every model request and external operation MUST be accounted for against that aggregate.
 
-### 10.2 Budget dimensions
+### 10.2 Immutable Attempt limit assignment
 
-Initial dimensions include provider input/output tokens, model requests, tool calls, wall-clock duration, executor CPU/memory/process/output limits where enforceable, estimated monetary cost, and delegated child-run allocations.
+Every Attempt MUST receive an immutable execution-limit assignment when it is created.
 
-### 10.3 Atomic reservations
+The assignment captures the remaining Run-level allocation available to that Attempt at creation. It is a snapshot of the authoritative Run budget, not a new allocation and not an independent replenishment of capacity.
+
+The assignment MUST include the Run's absolute deadline. An Attempt deadline MUST NOT extend the Run deadline or increase the remaining Run-level allowance.
+
+Recovery MUST retrieve and verify the exact assignment associated with the Attempt. Changes to mutable defaults or later configuration MUST NOT silently alter an existing Attempt's assignment.
+
+### 10.3 Phase 1 default Run profile
+
+The following defaults apply to one logical Run and aggregate across all its Attempts.
+
+| Dimension | Phase 1 default |
+|---|---:|
+| Total execution steps | 100 per Run |
+| Total Attempts | 3, including the initial Attempt |
+| Retries | 2 |
+| Model requests | 20 per Run |
+| Aggregate model input | 100,000 tokens per Run |
+| Aggregate model output | 20,000 tokens per Run |
+| Input per model request | 16,000 tokens |
+| Output per model request | 4,000 tokens |
+| Provider/model spend | USD 1.00 per Run |
+| Tool calls / dispatches | 40 per Run |
+| Concurrent external operations | 1 per Run |
+| Failed execution operations | 5 per Run |
+| Total Run elapsed time | 15 minutes |
+| Aggregate tool execution time | 5 minutes per Run |
+| Individual tool operation timeout | 60 seconds |
+
+Payload and serialized-content ceilings:
+
+| Payload | Phase 1 maximum |
+|---|---:|
+| Serialized model request | 256 KiB |
+| Serialized model response | 64 KiB |
+| Tool arguments | 64 KiB per call |
+| Tool result | 64 KiB per call |
+| Aggregate tool results | 1 MiB per Run |
+
+KiB means 1,024 bytes. Token limits and byte-size limits are separate dimensions and MUST both be enforced.
+
+The three-Attempt ceiling includes the initial Attempt. The two-retry ceiling is therefore not additive to three Attempts.
+
+There are no independent per-Attempt aggregate budgets that replenish Run capacity. Per-request, per-operation, and immutable Attempt-assignment constraints remain applicable.
+
+### 10.4 Atomic reservations and enforcement
 
 Budget reservations MUST be atomic under concurrent operations.
 
-Each reservation identifies run, attempt, resource dimension, amount, state, creation/expiry, and the exact associated operation or tool-call identity.
+Each reservation identifies the Run, Attempt, resource dimension, amount, state, creation/expiry, and exact associated operation or tool-call identity.
 
-The reservation transaction verifies available budget and updates reserved totals atomically. Concurrent reservations MUST serialize or use equivalent concurrency control so that the same available budget cannot be allocated more than once.
+The reservation transaction verifies available capacity and updates reserved totals atomically. Concurrent reservations MUST serialize or use equivalent concurrency control so that the same available capacity cannot be allocated more than once.
 
 Dispatch authorization MUST reference an active reservation for the exact operation. Reservation validation and binding and durable dispatch-intent creation are part of the same atomic authorization transaction described in Section 8.4. An operation MUST NOT be dispatched without this durable reservation.
 
-Reservations are settled, released, or marked uncertain. Expiry MUST NOT automatically release a reservation if the associated external operation may still be running or its outcome is unresolved. Uncertain reservations remain charged against available budget until reconciliation or an explicit, auditable resolution establishes the appropriate settlement.
+A request that would exceed any hard ceiling MUST be rejected before dispatch. Reservation and authorization MUST fail closed.
 
-### 10.4 Usage provenance
+Model-request capacity is consumed when durable dispatch authorization and reservation are committed, not only when a successful response arrives. Tool-call capacity is consumed when the durable dispatch intent is committed.
+
+Retries consume additional Run-level capacity. A retry MUST NOT receive fresh Run budgets. An indeterminate external operation MUST be reconciled before a retry can be authorized.
+
+The Run clock starts when execution starts and includes waiting and recovery time. Aggregate tool execution time accumulates across operations. The individual tool timeout does not replace the aggregate tool-time ceiling.
+
+Failed execution operations count toward the failure ceiling. Policy denials and user-requested cancellation do not count as failed execution operations.
+
+The maximum number of concurrent external operations is one. Concurrency control MUST prevent a second external operation from being authorized while the first remains active or unresolved.
+
+Attempt limits assigned at creation are immutable. A provider response, model output, tool argument, or retry request MUST NOT expand an assignment or the Run budget.
+
+Exceeding the defaults requires an explicitly configured and validated alternative profile. A model request or tool argument MUST NOT implicitly escalate limits.
+
+Reservations are settled, released, or marked uncertain. Expiry MUST NOT automatically release a reservation if the associated external operation may still be running or its outcome is unresolved. Uncertain reservations remain charged against available capacity until reconciliation or an explicit, auditable resolution establishes the appropriate settlement.
+
+### 10.5 Cost accounting
+
+Every provider adapter handling paid model requests MUST use a versioned pricing schedule associated with the applicable provider and model.
+
+Before dispatch, the runtime MUST reserve the maximum estimated cost of the request, including its permitted output. The estimate MUST use conservative token estimates and the configured provider rates.
+
+On completion, reported or measured usage settles the reservation. If usage cannot be established, the reservation remains charged against available budget until reconciliation or an audited adjustment resolves it.
+
+A paid model request MUST be rejected when its applicable pricing is unknown. Unknown pricing MUST NOT be treated as zero.
+
+A local provider may use an explicitly configured zero-monetary-cost policy. Such a policy does not remove token, time, execution, payload, or other resource limits.
+
+The USD 1.00 ceiling is a runtime accounting limit based on configured rates. It is not a guarantee that the provider's eventual invoice will exactly match the runtime estimate.
+
+### 10.6 Usage provenance
 
 Usage records distinguish:
 
@@ -396,7 +463,7 @@ Records preserve source, unit, amount, timestamp, and confidence/measurement sta
 
 Unknown usage is not zero. Estimated monetary cost is not confirmed billing.
 
-Where actual usage is unavailable before dispatch, conservative reservations are used.
+Where actual usage is unavailable before dispatch, conservative reservations are used. Unknown usage MUST retain its reservation or be conservatively accounted for until reconciled.
 
 ## 11. Provider Abstraction and Routing
 
@@ -818,8 +885,7 @@ The following remain explicit project decisions:
 6. Event payload retention and protected-payload strategy.
 7. Memory ownership, retention, and deletion policy.
 8. Public API and schema compatibility policy.
-9. Concrete initial budget values and default execution ceilings.
-10. Provider data-handling policy and allowed fallback boundaries.
+9. Provider data-handling policy and allowed fallback boundaries.
 
 These decisions must be recorded before the affected functionality ships. They do not weaken the accepted architectural invariants.
 

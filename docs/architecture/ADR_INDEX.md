@@ -42,6 +42,7 @@ Acceptance of an architecture direction does not mean that the feature is implem
 | ADR-021 | CR-021 | Delegated Authority Derived by Intersection | Implementation-gated |
 | ADR-022 | CR-022 | Bounded Delegation and Explicit Child Failure Semantics | Implementation-gated |
 | ADR-023 | CR-023 | Versioned Independent Evaluation Evidence Contract | Accepted direction |
+| ADR-027 | CR-027 | Phase 1 Default Run Budgets and Execution Ceilings | Accepted |
 
 ## Decision summaries
 
@@ -229,22 +230,34 @@ Acceptance of an architecture direction does not mean that the feature is implem
 
 **Consequences:** Conductor cannot modify or self-certify evaluation results. Evidence and finding schemas require explicit versioning.
 
+### ADR-027 — Phase 1 Default Run Budgets and Execution Ceilings
+
+Accepted the Phase 1 Run-level default profile, aggregate accounting across Attempts, immutable Attempt snapshots, atomic reservations, conservative cost accounting, and fail-closed enforcement. See ADR-027 for the complete limits and counting rules.
+
 ## Open Decision Register
 
-These are not resolved by ADR-001 through ADR-023.
+The following decisions remain unresolved after ADR-001 through ADR-027.
 
 | ID | Open decision | Required before |
 |---|---|---|
 | OPEN-001 | Product name and legal/package/domain clearance | Public naming and publication |
-| OPEN-002 | License and contribution model | Public source release |
-| OPEN-003 | Rust edition and MSRV | Toolchain bootstrap |
+| OPEN-002 | Contribution model (license resolved by ADR-026) | Accepting external contributions |
+
 | OPEN-004 | Initial real provider selection | Provider adapter implementation |
 | OPEN-005 | Initial local identity/authentication model | Authenticated run APIs |
 | OPEN-006 | Event payload retention and protected-payload strategy | Persistent event payloads |
 | OPEN-007 | Memory ownership, retention, and deletion policy | Persistent user memory |
 | OPEN-008 | Public API/schema compatibility policy | Public API or SDK publication |
-| OPEN-009 | Concrete default budget and execution ceilings | Runtime bootstrap |
 | OPEN-010 | Provider data-handling and allowed fallback boundaries | Provider routing/fallback |
+
+## Resolved Open Decisions
+
+| Former ID | Resolution | ADR |
+|---|---|---|
+| OPEN-002 (license portion) | MIT License; contribution model remains open | ADR-026 |
+| OPEN-003 | Rust 2024 edition, MSRV 1.85.0, pinned stable toolchain 1.100.0 | ADR-024, ADR-025 |
+| OPEN-009 | Phase 1 default Run budgets and execution ceilings accepted | ADR-027 |
+
 
 ## Change Control
 
